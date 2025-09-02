@@ -52,8 +52,8 @@ with open("trades_log.csv", "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["time", "action", "price", "balance", "profit"])
 
-# === 8. Основной цикл симуляции ===
-while True:
+# === 8. Основной цикл симуляции (5 итераций для теста) ===
+for step in range(5):
     try:
         # Загружаем последнюю свечу
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=1)
@@ -94,4 +94,7 @@ while True:
     except Exception as e:
         print("❌ Ошибка:", e)
 
-    time.sleep(10)  # проверка каждые 10 секунд
+    time.sleep(5)  # для теста ставим задержку 5 секунд
+
+print("✅ Симуляция завершена (5 итераций)")
+
