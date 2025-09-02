@@ -5,9 +5,10 @@ import joblib
 import pandas as pd
 import numpy as np
 
-# === Определяем архитектуру сети (как в train_model.py) ===
+
+# === Архитектура сети (такая же, как при обучении) ===
 class Net(nn.Module):
-    def __init__(self, input_size, hidden_size=64, output_size=2):
+    def __init__(self, input_size, hidden_size=64, output_size=3):
         super(Net, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
@@ -23,11 +24,11 @@ class Net(nn.Module):
 # === Загружаем модель и скейлер ===
 scaler = joblib.load("scaler.pkl")
 
-input_size = 4  # ["открыть", "высокий", "низкий", "закрывать"]
-model = Net(input_size)
+input_size = 4  # используем ["открыть", "высокий", "низкий", "закрывать"]
+model = Net(input_size)  # создаем пустую модель
 state_dict = torch.load("model.pth", map_location=torch.device("cpu"))
-model.load_state_dict(state_dict)
-model.eval()
+model.load_state_dict(state_dict)  # загружаем веса
+model.eval()  # переводим в режим инференса
 
 
 # === Подключение к Binance ===
@@ -41,7 +42,7 @@ timeframe = "15m"
 limit = 200  # количество последних свечей для симуляции
 
 
-# === Функция для получения свечей ===
+# === Функция получения свечей ===
 def get_ohlcv():
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=["ts", "открыть", "высокий", "низкий", "закрывать", "объем"])
@@ -97,7 +98,7 @@ for i in range(1, len(df)):
     })
 
 
-# === Результаты ===
+# === Итоговые результаты ===
 print(f"Начальный баланс: {начальный_баланс} USDT")
 print(f"Финальный баланс: {баланс:.2f} USDT")
 print(f"Сделок: {len(торги)}")
