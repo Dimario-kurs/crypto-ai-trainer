@@ -11,7 +11,9 @@ df = pd.read_csv("BTC_ETH_15m_features.csv")
 
 # Убираем колонку time и целевую переменную y разделяем
 X = df.drop(columns=["time", "y"]).values.astype(np.float32)
-y = df["y"].values.astype(np.int64)
+
+# Целевая переменная: смещаем [-1, 0, 1] -> [0, 1, 2]
+y = df["y"].values.astype(np.int64) + 1
 
 # === 2. Dataset / DataLoader ===
 dataset = TensorDataset(torch.tensor(X), torch.tensor(y))
@@ -26,7 +28,8 @@ class Net(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden, num_classes)
         )
-    def forward(self, x): return self.net(x)
+    def forward(self, x): 
+        return self.net(x)
 
 model = Net(X.shape[1])
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -54,4 +57,4 @@ plt.plot(losses, label="Loss")
 plt.plot(accs, label="Accuracy")
 plt.legend()
 plt.savefig("training_curve.png")
-print("Training finished, curve saved to training_curve.png")
+print("✅ Training finished, curve saved to training_curve.png")
