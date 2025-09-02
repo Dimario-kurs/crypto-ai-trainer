@@ -6,6 +6,8 @@ import joblib
 import json
 import time
 import csv
+import os
+from datetime import datetime
 
 # === 1. Загружаем конфиг ===
 with open("config.json", "r") as f:
@@ -23,7 +25,7 @@ class Net(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# === 3. Определяем input_size из CSV ===
+# === 3. Определяем input_size ===
 df = pd.read_csv("BTC_ETH_15m_features.csv")
 X = df.drop(columns=["time", "y"]).values.astype("float32")
 input_size = X.shape[1]
@@ -34,9 +36,11 @@ scaler = joblib.load("scaler.pkl")
 
 # === 5. Загружаем модель ===
 model = Net(input_size)
-state_dict = torch.load("model.pth", map_location="cpu")
+model_path = config.get("model_path", "model.pth")
+state_dict = torch.load(model_path, map_location="cpu")
 model.load_state_dict(state_dict)
 model.eval()
+print(f"[INFO] Модель загружена из {model_path}")
 
 # === 6. Настройки торговли ===
 exchange = getattr(ccxt, config["exchange"])()
@@ -47,8 +51,10 @@ trade_size = config["trade_size"]
 
 trades = []
 
-# === 7. Лог сделок в CSV ===
-with open("trades_log.csv", "w", newline="") as f:
+# === 7. Лог сделок в logs/ ===
+os.makedirs("logs", exist_ok=True)
+logfile = f"logs/trades_{datetime.now().strftime('%Y_%m_%d_%H%M')}.csv"
+with open(logfile, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["time", "action", "price", "balance", "profit"])
 
@@ -87,14 +93,13 @@ for step in range(5):
         print(f"[{now}] Close={close}, Action={action}, Balance={balance:.2f}")
 
         # Лог в CSV
-        with open("trades_log.csv", "a", newline="") as f:
+        with open(logfile, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([now, action, close, balance, profit])
 
     except Exception as e:
         print("❌ Ошибка:", e)
 
-    time.sleep(5)  # для теста ставим задержку 5 секунд
+    time.sleep(5)  # задержка 5 секунд для теста
 
-print("✅ Симуляция завершена (5 итераций)")
-
+print(f"✅ Симуляция завершена (5 итераций), лог сохранён в {logfile}")
