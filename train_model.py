@@ -96,7 +96,11 @@ plt.legend()
 plt.savefig("training_curve.png")
 print("✅ Training finished, curve saved to training_curve.png")
 
-# === 6. Сохраняем модель ===
+# Сохраняем state_dict (рекомендуемый вариант)
 torch.save(model.state_dict(), "model.pth")
-print("✅ Model saved to model.pth")
+
+# Дополнительно сохраняем всю модель (если захочешь загружать напрямую)
+torch.save(model, "model_full.pth")
+
+print("✅ Model saved to model.pth (state_dict) and model_full.pth (full model)")
 
