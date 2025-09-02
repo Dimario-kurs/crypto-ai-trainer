@@ -8,26 +8,29 @@ import matplotlib.pyplot as plt
 import joblib
 import json
 from sklearn.preprocessing import StandardScaler
+from datetime import datetime
+import os
+
+# === 0. Готовим папки ===
+os.makedirs("models", exist_ok=True)
+os.makedirs("logs", exist_ok=True)
 
 # === 1. Загружаем данные ===
 df = pd.read_csv("BTC_ETH_15m_features.csv")
 
-# Отделяем признаки и целевую переменную
 X = df.drop(columns=["time", "y"]).values.astype(np.float32)
 y = df["y"].values.astype(np.int64)
 
-# Сдвигаем метки {-1,0,1} → {0,1,2}
+# Сдвиг меток {-1,0,1} → {0,1,2}
 y = y + 1
 
-# === 2. Нормализация признаков ===
+# === 2. Нормализация ===
 scaler = StandardScaler()
 X = scaler.fit_transform(X)
 joblib.dump(scaler, "scaler.pkl")
 
-# === 3. Dataset / DataLoader ===
+# === 3. Dataset/DataLoader ===
 dataset = TensorDataset(torch.tensor(X), torch.tensor(y))
-
-# Разделим на train/test (80/20), фиксируем seed
 train_size = int(0.8 * len(dataset))
 test_size = len(dataset) - train_size
 train_ds, test_ds = random_split(dataset, [train_size, test_size],
@@ -55,9 +58,7 @@ loss_fn = nn.CrossEntropyLoss()
 
 # === 5. Обучение ===
 epochs = 10
-train_losses, test_accs = [], []
-
-log_rows = []
+train_losses, test_accs, log_rows = [], [], []
 
 for epoch in range(epochs):
     # --- Train ---
@@ -86,31 +87,38 @@ for epoch in range(epochs):
 
     train_losses.append(avg_loss)
     test_accs.append(test_acc)
-
     log_rows.append([epoch+1, avg_loss, train_acc, test_acc])
-    print(f"Epoch {epoch+1}: Train Loss={avg_loss:.4f}, Train Acc={train_acc:.2f}, Test Acc={test_acc:.2f}")
+    print(f"Epoch {epoch+1}: Loss={avg_loss:.4f}, Train Acc={train_acc:.2f}, Test Acc={test_acc:.2f}")
 
-# === 6. Сохранение модели и графика ===
-torch.save(model.state_dict(), "model.pth")
+# === 6. Сохранения ===
+timestamp = datetime.now().strftime("%Y_%m_%d_%H%M")
+
+# модель
+model_path = f"models/model_{timestamp}.pth"
+torch.save(model.state_dict(), model_path)
+
+# график
 plt.plot(train_losses, label="Train Loss")
 plt.plot(test_accs, label="Test Accuracy")
 plt.legend()
-plt.savefig("training_curve.png")
+plt.savefig(f"logs/training_curve_{timestamp}.png")
 
-# Сохраняем лог обучения
+# лог
 log_df = pd.DataFrame(log_rows, columns=["epoch", "train_loss", "train_acc", "test_acc"])
-log_df.to_csv("training_log.csv", index=False)
+log_df.to_csv(f"logs/training_log_{timestamp}.csv", index=False)
 
-# Сохраняем config.json (input_size пригодится в симуляции)
+# конфиг
 config = {
     "input_size": input_size,
     "hidden": 64,
-    "num_classes": 3
+    "num_classes": 3,
+    "model_path": model_path
 }
 with open("config.json", "w") as f:
     json.dump(config, f, indent=2)
 
-print("✅ Training finished, curve saved to training_curve.png")
-print("✅ Model saved to model.pth")
-print("✅ Training log saved to training_log.csv")
+print("✅ Training finished")
+print(f"✅ Model saved to {model_path}")
+print(f"✅ Training curve → logs/training_curve_{timestamp}.png")
+print(f"✅ Training log → logs/training_log_{timestamp}.csv")
 print("✅ Config saved to config.json")
