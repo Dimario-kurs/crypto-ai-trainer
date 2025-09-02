@@ -3,9 +3,9 @@ import ccxt
 import torch
 import torch.nn as nn
 import pandas as pd
-import joblib
 import json
 import time
+import joblib
 
 # === 1. Загружаем конфиг ===
 with open("config.json", "r") as f:
@@ -23,20 +23,22 @@ class Net(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# === 3. Определяем размер входа (input_size) из обучающего датасета ===
+# === 3. Определяем input_size из CSV ===
 df = pd.read_csv("BTC_ETH_15m_features.csv")
 X = df.drop(columns=["time", "y"]).values.astype("float32")
 input_size = X.shape[1]
-print(f"[INFO] Определён input_size = {input_size}")
+print(f"[INFO] Автоматически определён input_size = {input_size}")
 
-# === 4. Загружаем нормализатор и модель ===
-scaler = joblib.load("scaler.pkl")   # тот же StandardScaler, что и при обучении
+# === 4. Подгружаем scaler и нормализацию ===
+scaler = joblib.load("scaler.pkl")
+
+# === 5. Загружаем модель ===
 model = Net(input_size)
 state_dict = torch.load("model.pth", map_location="cpu")
 model.load_state_dict(state_dict)
 model.eval()
 
-# === 5. Настройки торговли ===
+# === 6. Настройки торговли ===
 exchange = getattr(ccxt, config["exchange"])()
 symbol = config["symbol"]
 timeframe = config["timeframe"]
@@ -46,24 +48,20 @@ trade_size = config["trade_size"]
 # История сделок
 trades = []
 
-# === 6. Основной цикл симуляции ===
+# === 7. Основной цикл симуляции ===
 while True:
     try:
-        # Загружаем последнюю свечу
+        # Загружаем последние свечи
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=1)
         last = ohlcv[-1]
         _, open_, high, low, close, volume = last
 
-        # Формируем признаки (пока берём только close → копируем input_size раз)
+        # Фичи (пока только close, дублируем под размер input_size)
         features = [[close] * input_size]
-
-        # Нормализация как при обучении
         features = scaler.transform(features)
-
-        # Преобразуем в тензор
         features = torch.tensor(features, dtype=torch.float32)
 
-        # Получаем прогноз
+        # Прогноз
         with torch.no_grad():
             pred = model(features).argmax(1).item()
 
@@ -83,6 +81,6 @@ while True:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Close={close}, Action={action}, Balance={balance:.2f}")
 
     except Exception as e:
-        print(f"[ERROR] {e}")
+        print("[ERROR]", e)
 
-    time.sleep(10)  # пока 10 секунд, для реала ставь 60*15
+    time.sleep(10)  # каждые 10 сек (для реальных 15m свечей — ставим 900)
