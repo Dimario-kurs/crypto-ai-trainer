@@ -1,12 +1,16 @@
-# === run_live_simulation.py ===
 import ccxt
 import torch
 import torch.nn as nn
-import numpy as np
-import joblib
+import pandas as pd
+import json
 import time
+from collections import deque
 
-# === 1. Модель ===
+# === 1. Загружаем конфиг ===
+with open("config.json", "r") as f:
+    config = json.load(f)
+
+# === 2. Класс модели ===
 class Net(nn.Module):
     def __init__(self, input_size, hidden=64, num_classes=3):
         super().__init__()
@@ -15,72 +19,62 @@ class Net(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden, num_classes)
         )
+
     def forward(self, x):
         return self.net(x)
 
-# === 2. Загрузка модели и scaler ===
-scaler = joblib.load("scaler.pkl")
+# === 3. Определяем input_size из датасета ===
+df = pd.read_csv("BTC_ETH_15m_features.csv")
+X = df.drop(columns=["time", "y"]).values.astype("float32")
+input_size = X.shape[1]  # количество признаков
 
-dummy_input_size = 23  # количество фичей (24 - time - y)
-model = Net(input_size=dummy_input_size)
-model.load_state_dict(torch.load("model.pth"))
+print(f"[INFO] Автоматически определён input_size = {input_size}")
+
+# === 4. Загружаем модель ===
+model = Net(input_size)
+state_dict = torch.load("model.pth", map_location="cpu")
+model.load_state_dict(state_dict)
 model.eval()
 
-# === 3. Подключение к бирже Binance ===
-exchange = ccxt.binance()
-symbol = "BTC/USDT"
-timeframe = "15m"
+# === 5. Настройки торговли ===
+exchange = getattr(ccxt, config["exchange"])()
+symbol = config["symbol"]
+timeframe = config["timeframe"]
+balance = config["initial_balance"]
+trade_size = config["trade_size"]
 
-# === 4. Симуляция торговли ===
-balance = 1000.0   # стартовый баланс USDT
-trade_size = 10.0  # сумма на сделку
-position = None    # текущая позиция (None, "long", "short")
-entry_price = 0.0
+# История сделок
+trades = []
 
-print("🚀 Запуск симуляции...")
+# === 6. Основной цикл симуляции ===
+while True:
+    # Загружаем последние свечи
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=1)
+    last = ohlcv[-1]
+    _, open_, high, low, close, volume = last
 
-for i in range(96):  # примерно 1 сутки по 15м свечам
-    # Загружаем свежие 100 свечей
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=100)
-    last_candle = ohlcv[-1]  # [timestamp, open, high, low, close, volume]
+    # Формируем фичи (очень упрощённо: только цена закрытия)
+    features = torch.tensor([[close] * input_size], dtype=torch.float32)
 
-    # Делаем фичи (пока только цена и объем)
-    features = np.array([
-        last_candle[1],  # open
-        last_candle[2],  # high
-        last_candle[3],  # low
-        last_candle[4],  # close
-        last_candle[5]   # volume
-    ], dtype=np.float32).reshape(1, -1)
-
-    # Нормализуем
-    features = scaler.transform(features)
-
-    # Прогноз
-    x_tensor = torch.tensor(features, dtype=torch.float32)
+    # Получаем прогноз
     with torch.no_grad():
-        pred = model(x_tensor)
-        action = pred.argmax(1).item()  # 0=SELL, 1=HOLD, 2=BUY (с учетом сдвига)
+        pred = model(features).argmax(1).item()
 
-    price = last_candle[4]
-
-    # === Логика сделок ===
-    if action == 2 and position is None:  # BUY
-        position = "long"
-        entry_price = price
+    # Торговая логика
+    action = "HOLD"
+    if pred == 1 and balance >= trade_size:  # BUY сигнал
         balance -= trade_size
-        print(f"[{i}] Покупка по {price:.2f}, баланс={balance:.2f}")
-    elif action == 0 and position == "long":  # SELL
-        profit = trade_size * (price / entry_price)
-        balance += profit
-        print(f"[{i}] Продажа по {price:.2f}, прибыль={profit-trade_size:.2f}, баланс={balance:.2f}")
-        position = None
-    else:
-        print(f"[{i}] Держим позицию ({'нет' if position is None else position}), цена={price:.2f}")
+        trades.append(("BUY", close))
+        action = "BUY"
+    elif pred == 2 and trades:  # SELL сигнал
+        buy_price = trades[-1][1]
+        profit = (close - buy_price) / buy_price * trade_size
+        balance += trade_size + profit
+        trades.append(("SELL", close, profit))
+        action = f"SELL (profit={profit:.2f})"
 
-    time.sleep(1)  # имитация ожидания новой свечи (в реале можно оставить 60*15)
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Close={close}, Action={action}, Balance={balance:.2f}")
 
-print(f"🏁 Симуляция завершена. Итоговый баланс={balance:.2f} USDT")
-
+    time.sleep(10)  # ждём 10 секунд перед новой свечой (для реального — ставим 60 * 15)
 
 
