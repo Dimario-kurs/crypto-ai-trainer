@@ -8,7 +8,7 @@ api_key = os.getenv("BYBIT_API_KEY")
 secret_key = os.getenv("BYBIT_SECRET_KEY")
 
 if not api_key or not secret_key:
-    raise ValueError("❌ API ключи не найдены! Проверь файл .env")
+    raise ValueError("❌ Ключи API не найдены! Проверь файл .env")
 
 # === Подключаемся к Bybit ===
 exchange = ccxt.bybit({
