@@ -3,16 +3,13 @@ import ccxt
 import torch
 import torch.nn as nn
 import pandas as pd
+import joblib
 import json
 import time
-import joblib
-from collections import deque
 
-# === 1. Загружаем config и scaler ===
+# === 1. Загружаем конфиг ===
 with open("config.json", "r") as f:
     config = json.load(f)
-
-scaler = joblib.load("scaler.pkl")
 
 # === 2. Класс модели ===
 class Net(nn.Module):
@@ -26,26 +23,30 @@ class Net(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# === 3. Загружаем модель ===
-input_size = config["input_size"]
-model = Net(input_size, hidden=config["hidden"], num_classes=config["num_classes"])
+# === 3. Определяем размер входа (input_size) из обучающего датасета ===
+df = pd.read_csv("BTC_ETH_15m_features.csv")
+X = df.drop(columns=["time", "y"]).values.astype("float32")
+input_size = X.shape[1]
+print(f"[INFO] Определён input_size = {input_size}")
+
+# === 4. Загружаем нормализатор и модель ===
+scaler = joblib.load("scaler.pkl")   # тот же StandardScaler, что и при обучении
+model = Net(input_size)
 state_dict = torch.load("model.pth", map_location="cpu")
 model.load_state_dict(state_dict)
 model.eval()
 
-# === 4. Настройки торговли ===
-exchange = getattr(ccxt, config.get("exchange", "binance"))()
-symbol = config.get("symbol", "BTC/USDT")
-timeframe = config.get("timeframe", "15m")
-balance = config.get("initial_balance", 1000)
-trade_size = config.get("trade_size", 10)
+# === 5. Настройки торговли ===
+exchange = getattr(ccxt, config["exchange"])()
+symbol = config["symbol"]
+timeframe = config["timeframe"]
+balance = config["initial_balance"]
+trade_size = config["trade_size"]
 
 # История сделок
 trades = []
 
-print(f"[INFO] Запуск симуляции: {symbol}, {timeframe}, стартовый баланс = {balance} USDT")
-
-# === 5. Основной цикл симуляции ===
+# === 6. Основной цикл симуляции ===
 while True:
     try:
         # Загружаем последнюю свечу
@@ -53,25 +54,26 @@ while True:
         last = ohlcv[-1]
         _, open_, high, low, close, volume = last
 
-        # === Формируем фичи ===
-        # В live режиме у нас нет всех индикаторов, поэтому используем close и дублируем до input_size
-        raw_features = [[close] * input_size]
+        # Формируем признаки (пока берём только close → копируем input_size раз)
+        features = [[close] * input_size]
 
-        # Применяем scaler, чтобы признаки совпадали с обучением
-        features = scaler.transform(raw_features)
+        # Нормализация как при обучении
+        features = scaler.transform(features)
+
+        # Преобразуем в тензор
         features = torch.tensor(features, dtype=torch.float32)
 
-        # === Прогноз модели ===
+        # Получаем прогноз
         with torch.no_grad():
             pred = model(features).argmax(1).item()
 
-        # === Торговая логика ===
+        # Торговая логика
         action = "HOLD"
-        if pred == 1 and balance >= trade_size:  # BUY сигнал
+        if pred == 1 and balance >= trade_size:  # BUY
             balance -= trade_size
             trades.append(("BUY", close))
             action = "BUY"
-        elif pred == 2 and trades:  # SELL сигнал
+        elif pred == 2 and trades:  # SELL
             buy_price = trades[-1][1]
             profit = (close - buy_price) / buy_price * trade_size
             balance += trade_size + profit
@@ -80,12 +82,7 @@ while True:
 
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Close={close}, Action={action}, Balance={balance:.2f}")
 
-        # Сохраняем сделки в CSV
-        df_trades = pd.DataFrame(trades, columns=["action", "price", "profit"])
-        df_trades.to_csv("trades_log.csv", index=False)
-
     except Exception as e:
         print(f"[ERROR] {e}")
 
-    # Для теста ставим паузу 10 сек, в реальном режиме лучше 60*15 = 900 сек
-    time.sleep(10)
+    time.sleep(10)  # пока 10 секунд, для реала ставь 60*15
