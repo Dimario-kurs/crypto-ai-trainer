@@ -1,15 +1,18 @@
+# === run_live_simulation.py ===
 import ccxt
 import torch
 import torch.nn as nn
 import pandas as pd
 import json
 import time
-import csv
-import os
+import joblib
+from collections import deque
 
-# === 1. Загружаем конфиг ===
+# === 1. Загружаем config и scaler ===
 with open("config.json", "r") as f:
     config = json.load(f)
+
+scaler = joblib.load("scaler.pkl")
 
 # === 2. Класс модели ===
 class Net(nn.Module):
@@ -20,82 +23,69 @@ class Net(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden, num_classes)
         )
-
     def forward(self, x):
         return self.net(x)
 
-# === 3. Определяем input_size из датасета ===
-df = pd.read_csv("BTC_ETH_15m_features.csv")
-X = df.drop(columns=["time", "y"]).values.astype("float32")
-input_size = X.shape[1]
-
-print(f"[INFO] Автоматически определён input_size = {input_size}")
-
-# === 4. Загружаем модель ===
-model = Net(input_size)
+# === 3. Загружаем модель ===
+input_size = config["input_size"]
+model = Net(input_size, hidden=config["hidden"], num_classes=config["num_classes"])
 state_dict = torch.load("model.pth", map_location="cpu")
 model.load_state_dict(state_dict)
 model.eval()
 
-# === 5. Настройки торговли ===
-exchange = getattr(ccxt, config["exchange"])()
-symbol = config["symbol"]
-timeframe = config["timeframe"]
-balance = config["initial_balance"]
-trade_size = config["trade_size"]
+# === 4. Настройки торговли ===
+exchange = getattr(ccxt, config.get("exchange", "binance"))()
+symbol = config.get("symbol", "BTC/USDT")
+timeframe = config.get("timeframe", "15m")
+balance = config.get("initial_balance", 1000)
+trade_size = config.get("trade_size", 10)
 
-# === 6. Инициализация ===
-open_position = None   # (buy_price) если сделка открыта
-log_file = "trades_log.csv"
+# История сделок
+trades = []
 
-# создаём лог, если его нет
-if not os.path.exists(log_file):
-    with open(log_file, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["timestamp", "action", "price", "profit", "balance"])
+print(f"[INFO] Запуск симуляции: {symbol}, {timeframe}, стартовый баланс = {balance} USDT")
 
-# === 7. Основной цикл симуляции ===
+# === 5. Основной цикл симуляции ===
 while True:
     try:
-        # загружаем последнюю свечу
+        # Загружаем последнюю свечу
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=1)
         last = ohlcv[-1]
-        ts, open_, high, low, close, volume = last
+        _, open_, high, low, close, volume = last
 
-        # (заглушка) формируем фичи
-        features = torch.tensor([[close] * input_size], dtype=torch.float32)
+        # === Формируем фичи ===
+        # В live режиме у нас нет всех индикаторов, поэтому используем close и дублируем до input_size
+        raw_features = [[close] * input_size]
 
-        # прогноз
+        # Применяем scaler, чтобы признаки совпадали с обучением
+        features = scaler.transform(raw_features)
+        features = torch.tensor(features, dtype=torch.float32)
+
+        # === Прогноз модели ===
         with torch.no_grad():
             pred = model(features).argmax(1).item()
 
+        # === Торговая логика ===
         action = "HOLD"
-        profit = 0.0
-
-        # BUY
-        if pred == 1 and open_position is None and balance >= trade_size:
+        if pred == 1 and balance >= trade_size:  # BUY сигнал
             balance -= trade_size
-            open_position = close
+            trades.append(("BUY", close))
             action = "BUY"
-
-        # SELL
-        elif pred == 2 and open_position is not None:
-            buy_price = open_position
+        elif pred == 2 and trades:  # SELL сигнал
+            buy_price = trades[-1][1]
             profit = (close - buy_price) / buy_price * trade_size
             balance += trade_size + profit
-            action = f"SELL (p={profit:.2f})"
-            open_position = None
+            trades.append(("SELL", close, profit))
+            action = f"SELL (profit={profit:.2f})"
 
-        # лог
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Close={close}, Action={action}, Balance={balance:.2f}")
 
-        # записываем в CSV
-        with open(log_file, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([time.strftime('%Y-%m-%d %H:%M:%S'), action, close, profit, balance])
-
-        time.sleep(10)  # для теста — каждые 10 сек, в реале ставим 60*15
+        # Сохраняем сделки в CSV
+        df_trades = pd.DataFrame(trades, columns=["action", "price", "profit"])
+        df_trades.to_csv("trades_log.csv", index=False)
 
     except Exception as e:
         print(f"[ERROR] {e}")
-        time.sleep(30)
+
+    # Для теста ставим паузу 10 сек, в реальном режиме лучше 60*15 = 900 сек
+    time.sleep(10)
