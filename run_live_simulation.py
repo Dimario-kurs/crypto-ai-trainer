@@ -94,5 +94,6 @@ while True:
     except Exception as e:
         print("❌ Ошибка:", e)
 
-    time.sleep(10)  # проверка каждые 10 секунд (для реального → 900)
+    time.sleep(10)  # проверка каждые 10 секунд
+£
 
