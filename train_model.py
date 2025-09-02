@@ -4,39 +4,24 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 import joblib
+from sklearn.preprocessing import StandardScaler
 
 # === 1. Загружаем данные ===
 df = pd.read_csv("BTC_ETH_15m_features.csv")
 
-# Убираем колонку time
-X = df.drop(columns=["time", "y"])
+# Отделяем признаки и целевую переменную
+X = df.drop(columns=["time", "y"]).values.astype(np.float32)
+y = df["y"].values.astype(np.int64)
 
-# Заполняем пропуски нулями
-X = X.fillna(0)
-
-# Нормализация признаков
+# Масштабируем признаки
 scaler = StandardScaler()
-X = scaler.fit_transform(X).astype(np.float32)
-
-# Сохраняем нормализатор
+X = scaler.fit_transform(X)
 joblib.dump(scaler, "scaler.pkl")
 
-# Метки: переводим {-1,0,1} → {0,1,2}
-y = df["y"].replace({-1: 0, 0: 1, 1: 2}).astype(np.int64).values
-
-# === 2. Делим на train/test ===
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, shuffle=True
-)
-
-train_ds = TensorDataset(torch.tensor(X_train), torch.tensor(y_train))
-test_ds  = TensorDataset(torch.tensor(X_test), torch.tensor(y_test))
-
-train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
-test_loader  = DataLoader(test_ds, batch_size=64)
+# === 2. Dataset / DataLoader ===
+dataset = TensorDataset(torch.tensor(X), torch.tensor(y))
+loader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 # === 3. Модель ===
 class Net(nn.Module):
@@ -55,13 +40,10 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 loss_fn = nn.CrossEntropyLoss()
 
 # === 4. Тренировка ===
-train_losses, test_accs, train_accs = [], [], []
-
-for epoch in range(10):  # можно увеличить до 50+
-    # --- Train ---
-    model.train()
+losses, accs = [], []
+for epoch in range(10):  # 10 эпох
     total_loss, correct = 0, 0
-    for xb, yb in train_loader:
+    for xb, yb in loader:
         pred = model(xb)
         loss = loss_fn(pred, yb)
         optimizer.zero_grad()
@@ -69,37 +51,23 @@ for epoch in range(10):  # можно увеличить до 50+
         optimizer.step()
         total_loss += loss.item()
         correct += (pred.argmax(1) == yb).sum().item()
-    train_acc = correct / len(train_ds)
-
-    # --- Test ---
-    model.eval()
-    correct_test = 0
-    with torch.no_grad():
-        for xb, yb in test_loader:
-            pred = model(xb)
-            correct_test += (pred.argmax(1) == yb).sum().item()
-    test_acc = correct_test / len(test_ds)
-
-    # Логируем
-    train_losses.append(total_loss)
-    train_accs.append(train_acc)
-    test_accs.append(test_acc)
-
-    print(f"Epoch {epoch+1}: Train Loss={total_loss:.4f}, Train Acc={train_acc:.2f}, Test Acc={test_acc:.2f}")
+    acc = correct / len(dataset)
+    losses.append(total_loss)
+    accs.append(acc)
+    print(f"Epoch {epoch+1}: Loss={total_loss:.4f}, Accuracy={acc:.2f}")
 
 # === 5. Визуализация ===
-plt.figure(figsize=(10,5))
-plt.plot(train_losses, label="Train Loss")
-plt.plot(train_accs, label="Train Accuracy")
-plt.plot(test_accs, label="Test Accuracy")
+plt.plot(losses, label="Loss")
+plt.plot(accs, label="Accuracy")
 plt.legend()
 plt.savefig("training_curve.png")
 print("✅ Training finished, curve saved to training_curve.png")
 
-# Сохраняем state_dict (рекомендуемый вариант)
+# === 6. Сохранение модели ===
+# state_dict (рекомендуемый вариант)
 torch.save(model.state_dict(), "model.pth")
 
-# Дополнительно сохраняем всю модель (если захочешь загружать напрямую)
+# полная модель (альтернативный вариант)
 torch.save(model, "model_full.pth")
 
 print("✅ Model saved to model.pth (state_dict) and model_full.pth (full model)")
