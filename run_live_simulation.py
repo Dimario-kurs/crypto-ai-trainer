@@ -1,115 +1,84 @@
 import ccxt
 import torch
 import torch.nn as nn
-import joblib
-import pandas as pd
 import numpy as np
+import pandas as pd
+import joblib
+from datetime import datetime
 
-
-# === Архитектура сети (такая же, как при обучении) ===
+# === Модель ===
 class Net(nn.Module):
-    def __init__(self, input_size, hidden_size=64, output_size=3):
-        super(Net, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, output_size)
-
+    def __init__(self, input_size, hidden=64, num_classes=3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_size, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, num_classes)
+        )
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
+        return self.net(x)
 
-
-# === Загружаем модель и скейлер ===
+# === Загружаем скейлер и модель ===
 scaler = joblib.load("scaler.pkl")
 
-input_size = 4  # используем ["открыть", "высокий", "низкий", "закрывать"]
-model = Net(input_size)  # создаем пустую модель
+input_size = 4  # open, high, low, close
+model = Net(input_size)
 state_dict = torch.load("model.pth", map_location=torch.device("cpu"))
-model.load_state_dict(state_dict)  # загружаем веса
-model.eval()  # переводим в режим инференса
-
+model.load_state_dict(state_dict)
+model.eval()
 
 # === Подключение к Binance ===
-exchange = ccxt.binance({
-    "enableRateLimit": True,
-    "options": {"defaultType": "spot"}
-})
+exchange = ccxt.binance()
 
 symbol = "BTC/USDT"
 timeframe = "15m"
-limit = 200  # количество последних свечей для симуляции
+limit = 200  # количество последних свечей
 
+ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
-# === Функция получения свечей ===
-def get_ohlcv():
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=["ts", "открыть", "высокий", "низкий", "закрывать", "объем"])
-    return df
+# Превращаем в DataFrame
+df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+df["time"] = pd.to_datetime(df["timestamp"], unit="ms")
 
+# === Симуляция торговли ===
+balance = 1000.0  # стартовый депозит USDT
+trade_size = 10.0
+positions = []
+history = []
 
-# === Функция предсказания сигнала ===
-def предсказать_сигнал(row):
-    features = np.array([[row["открыть"], row["высокий"], row["низкий"], row["закрывать"]]])
-    features_scaled = scaler.transform(features)
-    tensor = torch.tensor(features_scaled, dtype=torch.float32)
+for _, row in df.iterrows():
+    x = np.array([[row["open"], row["high"], row["low"], row["close"]]], dtype=np.float32)
+    x_scaled = scaler.transform(x)
+    x_tensor = torch.tensor(x_scaled)
+
     with torch.no_grad():
-        output = model(tensor)
-        signal = torch.argmax(output).item()
-    # 0 = держать, 1 = long, 2 = short
-    if signal == 1:
-        return 1
-    elif signal == 2:
-        return -1
-    else:
-        return 0
+        pred = model(x_tensor)
+        action = pred.argmax(1).item()  # 0=держим, 1=покупка, 2=продажа
 
+    price = row["close"]
 
-# === Параметры симуляции ===
-начальный_баланс = 1000.0
-размер_торговли = 10.0
-баланс = начальный_баланс
-торги = []
+    if action == 1 and balance >= trade_size:  # покупка
+        positions.append(price)
+        balance -= trade_size
+        history.append((row["time"], "BUY", price, balance))
+    elif action == 2 and positions:  # продажа
+        entry = positions.pop(0)
+        pnl = (price - entry) / entry * trade_size
+        balance += trade_size + pnl
+        history.append((row["time"], "SELL", price, balance))
 
-
-# === Основной цикл симуляции ===
-df = get_ohlcv()
-
-for i in range(1, len(df)):
-    row = df.iloc[i]
-    сигнал = предсказать_сигнал(row)
-
-    прибыль = 0
-    if сигнал == 1:  # long
-        прибыль = размер_торговли * ((df.iloc[i]["закрывать"] - df.iloc[i]["открыть"]) / df.iloc[i]["открыть"])
-    elif сигнал == -1:  # short
-        прибыль = размер_торговли * ((df.iloc[i]["открыть"] - df.iloc[i]["закрывать"]) / df.iloc[i]["открыть"])
-
-    баланс += прибыль
-
-    торги.append({
-        "время": df.iloc[i]["ts"],
-        "открыть": df.iloc[i]["открыть"],
-        "закрывать": df.iloc[i]["закрывать"],
-        "сигнал": сигнал,
-        "прибыль": прибыль,
-        "баланс": баланс
-    })
-
-
-# === Итоговые результаты ===
-print(f"Начальный баланс: {начальный_баланс} USDT")
-print(f"Финальный баланс: {баланс:.2f} USDT")
-print(f"Сделок: {len(торги)}")
+# === Итоги ===
+print(f"Стартовый баланс: 1000 USDT")
+print(f"Финальный баланс: {balance:.2f} USDT")
+print(f"Сделок всего: {len(history)}")
 
 print("\nПоследние 5 сделок:")
-for t in торги[-5:]:
-    print(t)
+for h in history[-5:]:
+    print(h)
 
+# Сохраняем историю в CSV
+results = pd.DataFrame(history, columns=["time", "action", "price", "balance"])
+results.to_csv("simulation_results.csv", index=False)
+print("✅ Результаты сохранены в simulation_results.csv")
 
-# === Сохраняем историю ===
-results_df = pd.DataFrame(торги)
-results_df.to_csv("simulation_results.csv", index=False)
-print("✅ История сохранена в simulation_results.csv")
 
