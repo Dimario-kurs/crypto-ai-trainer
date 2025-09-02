@@ -1,44 +1,23 @@
 import ccxt
-import os
-from dotenv import load_dotenv
-import requests
 
-# === Загружаем ключи из .env ===
-load_dotenv()
-api_key = os.getenv("BYBIT_API_KEY")
-secret_key = os.getenv("BYBIT_SECRET_KEY")
-proxy = os.getenv("PROXY")
-
-if not api_key or not secret_key:
-    raise ValueError("❌ Ключи API не найдены! Проверь .env")
-
-# === Настраиваем requests.Session с прокси ===
-session = requests.Session()
-session.proxies = {
-    "http": proxy,
-    "https": proxy,
-}
-session.verify = True   # проверка SSL (обязательно!)
-
-# === Подключаемся к Bybit, привязываем session ===
-exchange = ccxt.bybit({
-    "apiKey": api_key,
-    "secret": secret_key,
+# === Подключаемся к Binance ===
+exchange = ccxt.binance({
     "enableRateLimit": True,
-    "options": {"defaultType": "spot"},
+    "options": {"defaultType": "spot"}
 })
-exchange.session = session  # 🚀 теперь все запросы ccxt идут через наш прокси
 
-# === Проверка соединения ===
+# === Получаем OHLCV по BTC/USDT ===
+symbol = "BTC/USDT"
+timeframe = "15m"   # можно "1h", "4h", "1d"
+limit = 100
+
 try:
-    print("⏳ Проверка баланса...")
-    balance = exchange.fetch_balance()
-    print("✅ Успешное подключение!")
-    print("Баланс:", balance["total"])
-
-    ticker = exchange.fetch_ticker("BTC/USDT")
-    print("📊 Цена BTC:", ticker["last"])
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    print(f"✅ Получили {len(ohlcv)} свечей для {symbol} ({timeframe})")
+    print("Первая свеча:", ohlcv[0])
+    print("Последняя свеча:", ohlcv[-1])
 except Exception as e:
-    print("❌ Ошибка подключения:", str(e))
+    print("❌ Ошибка:", str(e))
+
 
 
