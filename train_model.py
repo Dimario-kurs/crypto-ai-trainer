@@ -4,16 +4,27 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+import joblib
 
 # === 1. Загружаем данные ===
-# В реальном запуске нужно положить features.csv в эту же папку
 df = pd.read_csv("BTC_ETH_15m_features.csv")
 
-# Убираем колонку time и целевую переменную y разделяем
-X = df.drop(columns=["time", "y"]).values.astype(np.float32)
+# Убираем колонку time
+X = df.drop(columns=["time", "y"])
 
-# Целевая переменная: смещаем [-1, 0, 1] -> [0, 1, 2]
-y = df["y"].values.astype(np.int64) + 1
+# Заполняем пропуски нулями
+X = X.fillna(0)
+
+# Нормализация признаков
+scaler = StandardScaler()
+X = scaler.fit_transform(X).astype(np.float32)
+
+# Сохраняем нормализатор, чтобы использовать на новых данных
+joblib.dump(scaler, "scaler.pkl")
+
+# Метки: переводим {-1,0,1} → {0,1,2}
+y = df["y"].replace({-1: 0, 0: 1, 1: 2}).astype(np.int64).values
 
 # === 2. Dataset / DataLoader ===
 dataset = TensorDataset(torch.tensor(X), torch.tensor(y))
@@ -28,7 +39,7 @@ class Net(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden, num_classes)
         )
-    def forward(self, x): 
+    def forward(self, x):
         return self.net(x)
 
 model = Net(X.shape[1])
