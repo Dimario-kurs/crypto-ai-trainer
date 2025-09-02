@@ -18,6 +18,3 @@ try:
     print("Последняя свеча:", ohlcv[-1])
 except Exception as e:
     print("❌ Ошибка:", str(e))
-
-
-
