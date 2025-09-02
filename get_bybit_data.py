@@ -1,6 +1,7 @@
 import ccxt
 import os
 from dotenv import load_dotenv
+import requests
 
 # === Загружаем ключи из .env ===
 load_dotenv()
@@ -11,17 +12,18 @@ proxy = os.getenv("PROXY")
 if not api_key or not secret_key:
     raise ValueError("❌ Ключи API не найдены! Проверь .env")
 
-# === Подключаемся к Bybit с прокси ===
+# === Подключаемся к Bybit ===
 exchange = ccxt.bybit({
     "apiKey": api_key,
     "secret": secret_key,
     "enableRateLimit": True,
-    "params": {"defaultType": "spot"},
+    "options": {"defaultType": "spot"}
 })
 
-# Если задан прокси, добавляем его
+# Если есть прокси → добавляем
 if proxy:
-    exchange.proxies = {
+    exchange.session = requests.Session()
+    exchange.session.proxies = {
         "http": proxy,
         "https": proxy,
     }
@@ -33,3 +35,4 @@ try:
     print("Баланс:", balance["total"])
 except Exception as e:
     print("❌ Ошибка подключения:", str(e))
+
